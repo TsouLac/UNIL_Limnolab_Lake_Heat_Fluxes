@@ -373,25 +373,34 @@ head(df_all)
 ## Plot of atmospheric heat fluxes
 
 ```{r, fig.width=6, fig.height=5}
-df_all_period_month <- df_all_period %>%
-  mutate(month = floor_date(time, unit = 'month')) %>%
+df_all_period_month <- df_all %>%
+  mutate(month = month(time)) %>%
   group_by(month) %>%
   summarise(
-    H_sw = mean(H_sw),
-    H_lw_in = mean(H_lw_in),
-    H_lw_out = mean(H_lw_out),
-    H_le = mean(H_le),
-    H_c = mean(H_c),
-    H_net_atm = mean(H_net_atm)
+    H_sw_mean = mean(H_sw, na.rm = TRUE),
+    H_sw_sd = sd(H_sw, na.rm = TRUE),
+    H_lw_in_mean = mean(H_lw_in, na.rm = TRUE),
+    H_lw_in_sd = sd(H_lw_in, na.rm = TRUE),
+    H_lw_out_mean = mean(H_lw_out, na.rm = TRUE),
+    H_lw_out_sd = sd(H_lw_out, na.rm = TRUE),
+    H_le_mean = mean(H_le, na.rm = TRUE),
+    H_le_sd = sd(H_le, na.rm = TRUE),
+    H_c_mean = mean(H_c, na.rm = TRUE),
+    H_c_sd = sd(H_c, na.rm = TRUE),
+    H_net_atm_mean = mean(H_net_atm, na.rm = TRUE),
+    H_net_atm_sd = sd(H_net_atm, na.rm = TRUE)
   ) %>%
-  pivot_longer(-month, names_to = 'Flux', values_to = 'Value')
+  pivot_longer(-month, names_to = c('Flux', '.value'), names_sep = '_(?=[^_]+$)')
 
-ggplot(df_all_period_month, aes(x = month, y = Value, color = Flux, linewidth = Flux)) +
+ggplot(df_all_period_month, aes(x = month, y = mean, color = Flux, linewidth = Flux)) +
+  geom_ribbon(aes(ymin = mean - sd, ymax = mean + sd, fill = Flux), alpha = 0.2, color = NA, linewidth = 0, show.legend = FALSE) +
   geom_line() +
   scale_linewidth_manual(values = c('H_net_atm' = 1.5, 'H_sw' = 0.8, 'H_lw_in' = 0.8, 
                                      'H_lw_out' = 0.8, 'H_le' = 0.8, 'H_c' = 0.8)) +
   scale_color_manual(values = c('H_net_atm' = 'black', 'H_sw' = 'orange', 'H_lw_in' = 'red', 
                                  'H_lw_out' = 'blue', 'H_le' = 'green', 'H_c' = 'purple')) +
+  scale_fill_manual(values = c('H_net_atm' = 'black', 'H_sw' = 'orange', 'H_lw_in' = 'red', 
+                                'H_lw_out' = 'blue', 'H_le' = 'green', 'H_c' = 'purple')) +
   labs(y = 'Heat Fluxes (W/m²)', x = 'Time') +
   theme(legend.position = 'lower left')
 ```
@@ -419,15 +428,14 @@ mydir <- '../data/'
 myfile <- 'Qin.dat'
 
 # Read discharge data (skip first 3 header lines)
-df_Qin <- read_delim(file.path(mydir, myfile), delim = ' ', skip = 3, 
-                      col_names = c('Time [d]', 'Q_in [m3/s]'), col_types = cols())
-
+df_Qin <- read.table(file.path(mydir, myfile), skip = 3)
+colnames(df_Qin) = c('Time_d', 'Q_in_m3s')
 # Set time as index
 date_ref <- ymd('1981-01-01')
 df_Qin <- df_Qin %>%
-  mutate(time = date_ref + days(`Time [d]`)) %>%
+  mutate(time = date_ref + ddays(Time_d)) %>%
   mutate(time = floor_date(time, unit = 'hour')) %>%
-  select(time, `Q_in [m3/s]`)
+  select(time, Q_in_m3s)
 
 head(df_Qin)
 ```
@@ -436,18 +444,17 @@ head(df_Qin)
 
 ```{r}
 mydir <- '../data/'
-myfile <- 'Tin.dat'
+myfile <- 'Tin.txt'
 
 # Read temperature data (skip first 3 header lines)
-df_Tin <- read_delim(file.path(mydir, myfile), delim = ' ', skip = 3, 
-                      col_names = c('Time [d]', 'T_in [C]'), col_types = cols())
-
+df_Tin <- read.table(file.path(mydir, myfile), skip = 3)
+colnames(df_Tin) = c('Time_d', 'T_in_C')
 # Set time as index
 date_ref <- ymd('1981-01-01')
 df_Tin <- df_Tin %>%
-  mutate(time = date_ref + days(`Time [d]`)) %>%
+  mutate(time = date_ref + ddays(Time_d)) %>%
   mutate(time = floor_date(time, unit = 'hour')) %>%
-  select(time, `T_in [C]`)
+  select(time, T_in_C)
 
 head(df_Tin)
 ```
@@ -459,17 +466,17 @@ head(df_Tin)
 ```{r}
 # Merge discharge and temperature
 df_QT <- df_Qin %>%
-  left_join(df_Tin, by = 'time') %>%
-  fill(`T_in [C]`, .direction = 'down')
+  left_join(df_Tin, by = "time") %>%
+  fill( T_in_C, .direction = 'down')
 
 # Merge all datasets
 data <- df_all %>%
   left_join(df_QT, by = 'time') %>%
-  fill(`Q_in [m3/s]`, `T_in [C]`, .direction = 'down')
+  fill(Q_in_m3s, T_in_C, .direction = 'down')
 
 # Calculate throughflow heat flux
 data <- data %>%
-  mutate(H_f = Hf(`Q_in [m3/s]`, `T_in [C]`, `Temp_[C]`, Surf_area))
+  mutate(H_f = Hf(Q_in_m3s,  T_in_C, Temp_C, Surf_area))
 
 head(data)
 ```
@@ -481,7 +488,7 @@ data_period <- data %>%
   filter(time >= start_day & time <= end_day)
 
 data_period_month <- data_period %>%
-  mutate(month = floor_date(time, unit = 'month')) %>%
+  mutate(month = month(time)) %>%
   group_by(month) %>%
   summarise(
     H_sw = mean(H_sw),
@@ -610,8 +617,8 @@ You need to modify:
 - The temperature from inflow 'Tin.dat'. The easiest solution is to open this file in a Text Editor or in Excel and change the temperature to a constant value = 5. Save the file as 'Tin_connection.dat'
 
 The next step is to run the script above by changing:
-- `myfile <- 'Qin.dat'` to `myfile <- 'Qin_connection.dat'`
-- `myfile <- 'Tin.dat'` to `myfile <- 'Tin_connection.dat'`
+- `myfile <- 'Qin.txt'` to `myfile <- 'Qin_connection.txt'`
+- `myfile <- 'Tin.txt'` to `myfile <- 'Tin_connection.txt'`
 
 ---
 
