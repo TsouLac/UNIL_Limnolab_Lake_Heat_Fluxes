@@ -106,6 +106,6 @@ def Hf(Q,Tr,Tl, A0):
     cp= 4180
     rho=1000
     
-    hf = -cp * rho * Q * (Tr - Tl) / A0
+    hf = -cp * rho * Q * (Tl - Tr) / A0
     
     return hf
