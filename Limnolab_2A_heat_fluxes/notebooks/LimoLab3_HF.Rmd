@@ -1,0 +1,653 @@
+---
+title: "Aquatic Ecosystems - Lakes Section: Heat Fluxes Analysis"
+author: "Damien Bouffard"
+date: "2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: "flatly"
+---
+
+# Limnolab
+
+## Goal
+
+The goal of this LimnoLab is to quantify (i) **the importance of the riverine throughflow heat transport compared to the atmospheric heat fluxes** and (ii) **how this contribution might change with the connection between Lake Schiffenen and Lake Morat**.
+
+Specifically we propose to:
+
+1. Estimate the heat fluxes (atmospheric and throughflow) over the period 1981 - 2022
+2. Estimate the relative importance of the throughflow for the period 1981 - 2022 and possible future connection between Lake Schiffenen and Lake Morat (using period 1981 - 2022 with an increased discharge into Lake Morat)
+
+## (Proposed) Method
+
+1. Provide a schematic of the problem including heat sources and sinks that illustrate the research question
+2. Prepare the dataset (this part is partly provided in this RMarkdown)
+3. Estimate the atmospheric heat flux (codes are provided)
+4. Estimate the river throughflow heat flux (codes are provided)
+5. Run the same calculation in case of a future connection between Schiffenen and Morat
+6. Evaluate the current contribution of the throughflow on the heat budget
+7. Evaluate the future contribution of Lake Schiffenen on the heat budget
+8. Discuss the role of the throughflow. You may consider the change in water residence time between the two scenario
+
+## Code
+
+This LimnoLab is provided with R support in this RMarkdown document. The code is commented extensively to make it easy for non-expert R users.
+
+---
+
+# R scripts
+
+## Lake Morat properties
+
+```{r}
+Volume_Morat <- 0.55 * 1e9  # [m3]
+Surf_area <- 22.8 * 1e6     # [m2]
+```
+
+# Part 0. Import the libraries
+
+```{r setup, include=FALSE}
+# Install packages if needed
+packages <- c("tidyverse", "readr", "lubridate", "ggplot2", "gridExtra")
+new_packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages)
+
+# Load libraries
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+
+# Set plot theme
+theme_set(theme_minimal() + theme(text = element_text(size = 12)))
+```
+
+## Source the heat fluxes functions
+
+The heat flux functions will be sourced from the heat_fluxes_lakes_R.R file.
+
+```{r}
+# Load the heat flux functions
+source('heat_fluxes_lakes_R.R')
+```
+
+---
+
+# Part 1. Load Meteorological data
+
+Data from the meteorological station from Neuchâtel (MeteoSwiss NEU) can be found here:
+
+> ../data/ForcingMorat.dat
+
+**Comments:** 'ForcingMorat.dat' is an ASCII file (e.g. a text file) that can be opened by all text or data editors. The first line is the header and indicates the content of the different columns:
+
+- **Time_[d]**: Time is in days since 01.01.1981. 
+- **u_[m/s]**: Wind velocity in East direction. Units [m/s]
+- **v_[m/s]**: Wind velocity in North direction. Units [m/s]
+- **Tair_[°C]**: Air temperature. Units [°C]
+- **sol_[W/m2]**: Net solar radiation. Units [W/m²]
+- **vap_[mbar]**: Water vapor pressure. Units [mbar]
+- **cloud_[-]**: Cloud coverage. No units. 0 = cloud free; 1 = sky fully covered by clouds
+- **rain_[m/hr]**: Precipitation. Units [m/h]
+
+## Load forcing data
+
+```{r}
+# Load the meteorological data
+mydir <- '../data/'
+myfile <- 'ForcingMorat.dat'
+
+# Create a data frame
+df <- read_delim(file.path(mydir, myfile), delim = ' ', col_types = cols())
+
+# Print the first few lines
+head(df)
+```
+
+## Set the index as time
+
+```{r}
+# Start of the time series on 01.01.1981 00:00:00
+date_ref <- ymd('1981-01-01')
+
+# Create a time vector
+df <- df %>%
+  mutate(time = date_ref + days(`Time_[d]`)) %>%
+  mutate(time = floor_date(time, unit = 'hour'))  # Round to hour
+
+# Print the first few lines
+head(df)
+```
+
+## Convert North and East winds into wind speed and drop unused columns
+
+$U_{10} = \sqrt{u^2 + v^2}$
+
+```{r}
+df <- df %>%
+  mutate(U10_[m/s] = sqrt(`u_[m/s]`^2 + `v_[m/s]`^2)) %>%
+  select(-`u_[m/s]`, -`v_[m/s]`, -`Time_[d]`)
+
+head(df)
+```
+
+## Select period
+
+Ideally start with a one-year period to validate your codes, then the final analysis could be run over the full time window.
+
+```{r}
+start_day <- ymd('2010-01-01')
+end_day <- ymd('2010-12-31')
+```
+
+## Display meteorological forcing
+
+- Air temperature
+- Wind speed
+- Solar radiation
+
+```{r, fig.width=8, fig.height=8}
+# Filter data for selected period
+df_period <- df %>%
+  filter(time >= start_day & time <= end_day)
+
+# Calculate daily means
+df_daily <- df_period %>%
+  mutate(date = date(time)) %>%
+  group_by(date) %>%
+  summarise(
+    Tair_mean = mean(`Tair_[°C]`),
+    U10_mean = mean(`U10_[m/s]`),
+    sol_mean = mean(`sol_[W/m2]`)
+  )
+
+# Create plots
+p1 <- ggplot(df_period, aes(x = time, y = `Tair_[°C]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_daily %>% mutate(time = as_datetime(date)), 
+            aes(y = Tair_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Air Temperature (°C)', x = '') +
+  theme(axis.text.x = element_blank())
+
+p2 <- ggplot(df_period, aes(x = time, y = `U10_[m/s]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_daily %>% mutate(time = as_datetime(date)), 
+            aes(y = U10_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Wind Speed (m/s)', x = '') +
+  theme(axis.text.x = element_blank())
+
+p3 <- ggplot(df_period, aes(x = time, y = `sol_[W/m2]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_daily %>% mutate(time = as_datetime(date)), 
+            aes(y = sol_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Solar Radiation (W/m²)', x = 'Time')
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+Make sure that the figures are consistent with your expectations.
+
+---
+
+# Part 2. Load Lake Temperature data
+
+The lake temperature data provided here are already the output of a 1D hydrodynamic model (Simstrat):
+
+> ../data/Results/T_out.dat
+
+Cantonal monitoring data can be found here:
+
+> ../data/Temperature_Morat.csv
+
+They can be used to compare with the model but this is not a requirement here.
+
+## Load lake temperature data
+
+```{r}
+# Load the lake temperature data
+mydir <- '../data/Results/'
+myfile <- 'T_out.dat'
+
+# Create a data frame
+df_T <- read_delim(file.path(mydir, myfile), delim = ' ', col_types = cols())
+
+head(df_T)
+```
+
+**Description:**
+
+The first column indicates the time in days. The following columns indicate the lake temperature at preselected depths, here every 1 m starting from the bottom = -45.000 to the surface = -0.000
+
+## Set time as index and extract surface temperature
+
+```{r}
+# Set time as index
+date_ref <- ymd('1981-01-01')
+
+df_T <- df_T %>%
+  mutate(time = date_ref + days(Datetime)) %>%
+  mutate(doy = yday(time)) %>%
+  select(time, doy, everything(), -Datetime)
+
+# Extract surface temperature only
+df_Morat <- df_T %>%
+  select(time, `Temp_[C]` = `-0.000`)
+
+head(df_Morat)
+```
+
+## Plot the surface temperature
+
+```{r, fig.width=8, fig.height=4}
+df_Morat_period <- df_Morat %>%
+  filter(time >= start_day & time <= end_day)
+
+ggplot(df_Morat_period, aes(x = time, y = `Temp_[C]`)) +
+  geom_line() +
+  labs(y = 'Surface Temperature (°C)', x = 'Time') +
+  theme_minimal()
+```
+
+---
+
+# Part 3. Merge the 2 datasets (meteorological and lake temperature data)
+
+```{r}
+# Merge the datasets
+df_all <- df %>%
+  left_join(df_Morat, by = 'time') %>%
+  fill(Temp_[C], .direction = 'down')
+
+head(df_all)
+```
+
+## Add lake surface temperature to the plot
+
+```{r, fig.width=8, fig.height=8}
+df_all_period <- df_all %>%
+  filter(time >= start_day & time <= end_day)
+
+# Calculate weekly means
+df_weekly <- df_all_period %>%
+  mutate(week = floor_date(time, unit = 'week')) %>%
+  group_by(week) %>%
+  summarise(
+    Tair_mean = mean(`Tair_[°C]`),
+    U10_mean = mean(`U10_[m/s]`),
+    sol_mean = mean(`sol_[W/m2]`),
+    Temp_mean = mean(`Temp_[C]`, na.rm = TRUE)
+  )
+
+p1 <- ggplot(df_all_period, aes(x = time, y = `Tair_[°C]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_weekly %>% mutate(time = week), 
+            aes(y = Tair_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Air Temperature (°C)', x = '') +
+  theme(axis.text.x = element_blank())
+
+p2 <- ggplot(df_all_period, aes(x = time, y = `U10_[m/s]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_weekly %>% mutate(time = week), 
+            aes(y = U10_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Wind Speed (m/s)', x = '') +
+  theme(axis.text.x = element_blank())
+
+p3 <- ggplot(df_all_period, aes(x = time, y = `sol_[W/m2]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_weekly %>% mutate(time = week), 
+            aes(y = sol_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Solar Radiation (W/m²)', x = '') +
+  theme(axis.text.x = element_blank())
+
+p4 <- ggplot(df_all_period, aes(x = time, y = `Temp_[C]`)) +
+  geom_line(alpha = 0.5) +
+  geom_line(data = df_weekly %>% mutate(time = week), 
+            aes(y = Temp_mean), color = 'red', linewidth = 1) +
+  labs(y = 'Lake Temperature (°C)', x = 'Time')
+
+grid.arrange(p1, p2, p3, p4, ncol = 1)
+```
+
+---
+
+# Part 4. Heat flux functions
+
+The functions to calculate the different terms of the heat fluxes can be found in the source file.
+
+## Direct Albedo
+
+The time-varying direct albedo, *Adir*, is added to the dataframe.
+
+```{r}
+# Create a lookup table for albedo by month
+albedo_by_month <- tibble(
+  month = 1:12,
+  Adir = c(0.22, 0.161, 0.108, 0.084, 0.075, 0.073, 0.074, 0.080, 0.099, 0.144, 0.210, 0.241)
+)
+
+# Add albedo to the dataframe
+df_all <- df_all %>%
+  mutate(month = month(time)) %>%
+  left_join(albedo_by_month, by = 'month') %>%
+  select(-month)
+
+head(df_all)
+```
+
+---
+
+# Heat flux calculation
+
+```{r}
+# Short-wave absorption
+df_all <- df_all %>%
+  mutate(H_sw = SW(`sol_[W/m2]`, `cloud_[-]`, Adir))
+
+# Incoming long-wave radiation
+df_all <- df_all %>%
+  mutate(Ea = emissivity_(`Tair_[°C]`, `vap_[mbar]`, `cloud_[-]`),
+         H_lw_in = LW_in(`Tair_[°C]`, Ea))
+
+# Outgoing long-wave radiation
+df_all <- df_all %>%
+  mutate(H_lw_out = LW_out(`Temp_[C]`))
+
+# Latent heat flux
+df_all <- df_all %>%
+  mutate(H_le = He(`Tair_[°C]`, `Temp_[C]`, `U10_[m/s]`, `vap_[mbar]`))
+
+# Sensible heat flux
+df_all <- df_all %>%
+  mutate(H_c = Hc(`Tair_[°C]`, `Temp_[C]`, `U10_[m/s]`))
+
+# Sum of atmospheric heat flux
+df_all <- df_all %>%
+  mutate(H_net_atm = H_sw + H_lw_in + H_lw_out + H_le + H_c)
+
+head(df_all)
+```
+
+## Plot of atmospheric heat fluxes
+
+```{r, fig.width=6, fig.height=5}
+df_all_period_month <- df_all %>%
+  mutate(month = month(time)) %>%
+  group_by(month) %>%
+  summarise(
+    H_sw_mean = mean(H_sw, na.rm = TRUE),
+    H_sw_sd = sd(H_sw, na.rm = TRUE),
+    H_lw_in_mean = mean(H_lw_in, na.rm = TRUE),
+    H_lw_in_sd = sd(H_lw_in, na.rm = TRUE),
+    H_lw_out_mean = mean(H_lw_out, na.rm = TRUE),
+    H_lw_out_sd = sd(H_lw_out, na.rm = TRUE),
+    H_le_mean = mean(H_le, na.rm = TRUE),
+    H_le_sd = sd(H_le, na.rm = TRUE),
+    H_c_mean = mean(H_c, na.rm = TRUE),
+    H_c_sd = sd(H_c, na.rm = TRUE),
+    H_net_atm_mean = mean(H_net_atm, na.rm = TRUE),
+    H_net_atm_sd = sd(H_net_atm, na.rm = TRUE)
+  ) %>%
+  pivot_longer(-month, names_to = c('Flux', '.value'), names_sep = '_(?=[^_]+$)')
+
+ggplot(df_all_period_month, aes(x = month, y = mean, color = Flux, linewidth = Flux)) +
+  geom_ribbon(aes(ymin = mean - sd, ymax = mean + sd, fill = Flux), alpha = 0.2, color = NA, linewidth = 0, show.legend = FALSE) +
+  geom_line() +
+  scale_linewidth_manual(values = c('H_net_atm' = 1.5, 'H_sw' = 0.8, 'H_lw_in' = 0.8, 
+                                     'H_lw_out' = 0.8, 'H_le' = 0.8, 'H_c' = 0.8)) +
+  scale_color_manual(values = c('H_net_atm' = 'black', 'H_sw' = 'orange', 'H_lw_in' = 'red', 
+                                 'H_lw_out' = 'blue', 'H_le' = 'green', 'H_c' = 'purple')) +
+  scale_fill_manual(values = c('H_net_atm' = 'black', 'H_sw' = 'orange', 'H_lw_in' = 'red', 
+                                'H_lw_out' = 'blue', 'H_le' = 'green', 'H_c' = 'purple')) +
+  labs(y = 'Heat Fluxes (W/m²)', x = 'Time') +
+  theme(legend.position = 'lower left')
+```
+
+---
+
+# Part 5. Throughflow
+
+The inflow temperature and discharge data are already formatted as input files for the 1D hydrodynamic model Simstrat.
+
+The discharge data of the inflow can be found here:
+
+> ../data/Qin.dat
+
+The temperature data of the inflow can be found here:
+
+> ../data/Tin.dat
+
+We assume that the discharge of the outflow is equal to the discharge of the inflow.
+
+## Load discharge data
+
+```{r}
+mydir <- '../data/'
+myfile <- 'Qin.dat'
+
+# Read discharge data (skip first 3 header lines)
+df_Qin <- read.table(file.path(mydir, myfile), skip = 3)
+colnames(df_Qin) = c('Time_d', 'Q_in_m3s')
+# Set time as index
+date_ref <- ymd('1981-01-01')
+df_Qin <- df_Qin %>%
+  mutate(time = date_ref + ddays(Time_d)) %>%
+  mutate(time = floor_date(time, unit = 'hour')) %>%
+  select(time, Q_in_m3s)
+
+head(df_Qin)
+```
+
+## Load inflow temperature data
+
+```{r}
+mydir <- '../data/'
+myfile <- 'Tin.txt'
+
+# Read temperature data (skip first 3 header lines)
+df_Tin <- read.table(file.path(mydir, myfile), skip = 3)
+colnames(df_Tin) = c('Time_d', 'T_in_C')
+# Set time as index
+date_ref <- ymd('1981-01-01')
+df_Tin <- df_Tin %>%
+  mutate(time = date_ref + ddays(Time_d)) %>%
+  mutate(time = floor_date(time, unit = 'hour')) %>%
+  select(time, T_in_C)
+
+head(df_Tin)
+```
+
+---
+
+# Part 6. Merge the discharge dataset with the previous dataset
+
+```{r}
+# Merge discharge and temperature
+df_QT <- df_Qin %>%
+  left_join(df_Tin, by = "time") %>%
+  fill( T_in_C, .direction = 'down')
+
+# Merge all datasets
+data <- df_all %>%
+  left_join(df_QT, by = 'time') %>%
+  fill(Q_in_m3s, T_in_C, .direction = 'down')
+
+# Calculate throughflow heat flux
+data <- data %>%
+  mutate(H_f = Hf(Q_in_m3s,  T_in_C, Temp_C, Surf_area))
+
+head(data)
+```
+
+## Plot of all heat fluxes including throughflow
+
+```{r, fig.width=7, fig.height=5}
+data_period <- data %>%
+  filter(time >= start_day & time <= end_day)
+
+data_period_month <- data_period %>%
+  mutate(month = month(time)) %>%
+  group_by(month) %>%
+  summarise(
+    H_sw = mean(H_sw),
+    H_lw_in = mean(H_lw_in),
+    H_lw_out = mean(H_lw_out),
+    H_le = mean(H_le),
+    H_c = mean(H_c),
+    H_f = mean(H_f),
+    H_net_atm = mean(H_net_atm)
+  ) %>%
+  pivot_longer(-month, names_to = 'Flux', values_to = 'Value')
+
+ggplot(data_period_month, aes(x = month, y = Value, color = Flux)) +
+  geom_line() +
+  labs(y = 'Heat Fluxes (W/m²)', x = 'Time') +
+  theme(legend.position = 'lower left')
+```
+
+---
+
+# Part 7. Analyze the entire dataset (from 1981 to 2022)
+
+```{r}
+start_day <- ymd('1981-01-01')
+end_day <- ymd('2022-12-31')
+
+data <- data %>%
+  mutate(doy = yday(time))
+```
+
+## Daily average heat fluxes by day of year
+
+```{r, fig.width=7, fig.height=5}
+data_analysis <- data %>%
+  filter(time >= start_day & time <= end_day)
+
+data_doy <- data_analysis %>%
+  group_by(doy) %>%
+  summarise(
+    H_sw = mean(H_sw, na.rm = TRUE),
+    H_lw_in = mean(H_lw_in, na.rm = TRUE),
+    H_lw_out = mean(H_lw_out, na.rm = TRUE),
+    H_le = mean(H_le, na.rm = TRUE),
+    H_c = mean(H_c, na.rm = TRUE),
+    H_f = mean(H_f, na.rm = TRUE),
+    H_net_atm = mean(H_net_atm, na.rm = TRUE)
+  ) %>%
+  pivot_longer(-doy, names_to = 'Flux', values_to = 'Value')
+
+ggplot(data_doy, aes(x = doy, y = Value, color = Flux)) +
+  geom_line() +
+  labs(y = 'Heat Fluxes (W/m²)', x = 'Day of Year') +
+  theme(legend.position = 'lower left')
+```
+
+## Heat fluxes with variability (mean ± std)
+
+```{r, fig.width=7, fig.height=5}
+data_doy_stats <- data_analysis %>%
+  group_by(doy) %>%
+  summarise(
+    H_sw_mean = mean(H_sw, na.rm = TRUE),
+    H_sw_std = sd(H_sw, na.rm = TRUE),
+    H_lw_in_mean = mean(H_lw_in, na.rm = TRUE),
+    H_lw_in_std = sd(H_lw_in, na.rm = TRUE),
+    H_lw_out_mean = mean(H_lw_out, na.rm = TRUE),
+    H_lw_out_std = sd(H_lw_out, na.rm = TRUE),
+    H_le_mean = mean(H_le, na.rm = TRUE),
+    H_le_std = sd(H_le, na.rm = TRUE),
+    H_c_mean = mean(H_c, na.rm = TRUE),
+    H_c_std = sd(H_c, na.rm = TRUE),
+    H_f_mean = mean(H_f, na.rm = TRUE),
+    H_f_std = sd(H_f, na.rm = TRUE),
+    H_net_atm_mean = mean(H_net_atm, na.rm = TRUE)
+  )
+
+ggplot() +
+  # H_sw
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_sw_mean, color = 'H_sw'), linewidth = 0.8) +
+  geom_ribbon(data = data_doy_stats, aes(x = doy, ymin = H_sw_mean - H_sw_std, 
+                                         ymax = H_sw_mean + H_sw_std), alpha = 0.2, fill = 'orange') +
+  # H_lw_in
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_lw_in_mean, color = 'H_lw_in'), linewidth = 0.8) +
+  geom_ribbon(data = data_doy_stats, aes(x = doy, ymin = H_lw_in_mean - H_lw_in_std, 
+                                         ymax = H_lw_in_mean + H_lw_in_std), alpha = 0.2, fill = 'red') +
+  # H_lw_out
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_lw_out_mean, color = 'H_lw_out'), linewidth = 0.8) +
+  geom_ribbon(data = data_doy_stats, aes(x = doy, ymin = H_lw_out_mean - H_lw_out_std, 
+                                         ymax = H_lw_out_mean + H_lw_out_std), alpha = 0.2, fill = 'blue') +
+  # H_le
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_le_mean, color = 'H_le'), linewidth = 0.8) +
+  geom_ribbon(data = data_doy_stats, aes(x = doy, ymin = H_le_mean - H_le_std, 
+                                         ymax = H_le_mean + H_le_std), alpha = 0.2, fill = 'green') +
+  # H_c
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_c_mean, color = 'H_c'), linewidth = 0.8) +
+  geom_ribbon(data = data_doy_stats, aes(x = doy, ymin = H_c_mean - H_c_std, 
+                                         ymax = H_c_mean + H_c_std), alpha = 0.2, fill = 'purple') +
+  # H_f
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_f_mean, color = 'H_f'), linewidth = 0.8) +
+  geom_ribbon(data = data_doy_stats, aes(x = doy, ymin = H_f_mean - H_f_std, 
+                                         ymax = H_f_mean + H_f_std), alpha = 0.2, fill = 'brown') +
+  # H_net_atm
+  geom_line(data = data_doy_stats, aes(x = doy, y = H_net_atm_mean, color = 'H_net_atm'), linewidth = 1.5) +
+  scale_color_manual(values = c('H_sw' = 'orange', 'H_lw_in' = 'red', 'H_lw_out' = 'blue',
+                                 'H_le' = 'green', 'H_c' = 'purple', 'H_f' = 'brown', 
+                                 'H_net_atm' = 'black')) +
+  labs(y = 'Heat Fluxes (W/m²)', x = 'Day of Year', color = 'Flux Type') +
+  theme(legend.position = 'top')
+```
+
+---
+
+# Part 8. Future scenario: Connection between Lake Schiffenen and Lake Morat
+
+This is now your turn...
+
+## Methods
+
+### Change throughflow
+
+**Hypothesis:** The flow is now constant 30 m³/s and the water is taken from the bottom of Lake Schiffenen. We assume first that the bottom temperature of Lake Schiffenen is constant and equal to 5°C. You can also test other scenarios.
+
+You need to modify:
+
+- The discharge from inflow 'Qin.dat'. The easiest solution is to open this file in a Text Editor or in Excel and change the discharge to a constant value = 30. Save the file as 'Qin_connection.dat'
+- The temperature from inflow 'Tin.dat'. The easiest solution is to open this file in a Text Editor or in Excel and change the temperature to a constant value = 5. Save the file as 'Tin_connection.dat'
+
+The next step is to run the script above by changing:
+- `myfile <- 'Qin.txt'` to `myfile <- 'Qin_connection.txt'`
+- `myfile <- 'Tin.txt'` to `myfile <- 'Tin_connection.txt'`
+
+---
+
+## Results and Discussion
+
+- Discuss how the total heat budget will be modified by this connection between Lake Schiffenen and Lake Morat
+
+- Discuss how the lake temperature of Lake Morat will be affected by this connection between Lake Schiffenen and Lake Morat
+
+- Are the conclusions changing if you extract the water at a shallower depth in Lake Schiffenen - for instance 10 m above the bottom or 20 m above the bottom? Quantify the changes.
+
+- Provide a convincing conclusion using the schematic that you have prepared at the beginning of this LimnoLab. You may use the paper from Raman Vinna et al. (2018) for your discussion.
+
+**References:**
+
+Raman Vinna, L., Wüest, A., Zappa, M., Fink, G., and Bouffard, D.: Tributaries affect the thermal response of lakes to climate change, Hydrol. Earth Syst. Sci., 22, 31–51, https://doi.org/10.5194/hess-22-31-2018, 2018
+
+Other relevant literature:
+
+Fink, G., Schmid, M., Wahl, B., Wolf, T., & Wüest, A. (2014). Heat flux modifications related to climate‐induced warming of large European lakes. Water Resources Research, 50(3), 2072-2085.
+
+Piccolroaz, S., Zhu, S., Ladwig, R., Carrea, L., Oliver, S., Piotrowski, A. P., ... & Zhu, D. Z. (2024). Lake water temperature modeling in an Era of climate change: Data sources, models, and future prospects. Reviews of Geophysics, 62(1), e2023RG000816.
+
+Råman Vinnå, L., Wüest, A., & Bouffard, D. (2017). Physical effects of thermal pollution in lakes. Water Resources Research, 53(5), 3968-3987.
+
+Schmid, M., & Read, J. (2022). Heat budget of lakes. Encyclopedia of Inland Waters, second edition, edited by: Mehner, T. and Tockner, K., Elsevier, 467-473.
+
+---
+
+## Questions
+
+Contact Damien Bouffard damien.bouffard@unil.ch
